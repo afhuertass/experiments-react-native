@@ -1,18 +1,19 @@
 import { VectorTile } from '@mapbox/vector-tile';
-import { Canvas, Fill, Path, Skia, type SkPath } from '@shopify/react-native-skia';
+import { Canvas, Circle, Fill, Path, Skia, type SkPath } from '@shopify/react-native-skia';
 import Pbf from 'pbf';
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 const CANVAS_SIZE = 320;
 const PADDING = 32;
-const TILE_URL = '/tiles/sample2.mvt';
-const TILE_LAYER = 'map';
+const TILE_URL = 'http://localhost:3000/world_cities/10/582/296';
+const PREFERRED_LAYER = 'world_cities';
 
 type Point = { x: number; y: number };
 type Geometry = Point[][];
 type RenderPolygon = { path: SkPath; color: string; kind: string };
-type RenderRoad = { path: SkPath; color: string; kind: string; strokeWidth: number };
+type RenderLine = { path: SkPath; color: string; kind: string; strokeWidth: number };
+type RenderPoint = { x: number; y: number; color: string; kind: string; radius: number };
 
 type TileTransform = {
   minX: number;
@@ -33,18 +34,18 @@ const colorForKind = (kind: string) => {
     case 'commercial':
       return '#fdae6b';
     default:
-      return '#20a85a';
+      return '#7b2cbf';
   }
 };
 
-const roadStyleForKind = (kind: string) => {
+const lineStyleForKind = (kind: string) => {
   switch (kind) {
     case 'major_road':
       return { color: '#fdd835', strokeWidth: 5 };
     case 'road':
       return { color: '#ffffff', strokeWidth: 3 };
     default:
-      return { color: '#ffffff', strokeWidth: 2 };
+      return { color: '#555555', strokeWidth: 2 };
   }
 };
 
@@ -84,14 +85,9 @@ const buildPolygonPath = (rings: Geometry, transform: TileTransform) => {
   rings.forEach((ring) => {
     ring.forEach((point, index) => {
       const canvasPoint = toCanvasPoint(point, transform);
-
-      if (index === 0) {
-        path.moveTo(canvasPoint.x, canvasPoint.y);
-      } else {
-        path.lineTo(canvasPoint.x, canvasPoint.y);
-      }
+      if (index === 0) path.moveTo(canvasPoint.x, canvasPoint.y);
+      else path.lineTo(canvasPoint.x, canvasPoint.y);
     });
-
     path.close();
   });
 
@@ -104,12 +100,8 @@ const buildLinePath = (lines: Geometry, transform: TileTransform) => {
   lines.forEach((line) => {
     line.forEach((point, index) => {
       const canvasPoint = toCanvasPoint(point, transform);
-
-      if (index === 0) {
-        path.moveTo(canvasPoint.x, canvasPoint.y);
-      } else {
-        path.lineTo(canvasPoint.x, canvasPoint.y);
-      }
+      if (index === 0) path.moveTo(canvasPoint.x, canvasPoint.y);
+      else path.lineTo(canvasPoint.x, canvasPoint.y);
     });
   });
 
@@ -117,8 +109,10 @@ const buildLinePath = (lines: Geometry, transform: TileTransform) => {
 };
 
 export function MvtShapeCanvas() {
+  const [layerName, setLayerName] = useState<string | null>(null);
   const [polygons, setPolygons] = useState<RenderPolygon[]>([]);
-  const [roads, setRoads] = useState<RenderRoad[]>([]);
+  const [lines, setLines] = useState<RenderLine[]>([]);
+  const [points, setPoints] = useState<RenderPoint[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -126,39 +120,43 @@ export function MvtShapeCanvas() {
 
     const loadTile = async () => {
       try {
-        const response = await fetch(TILE_URL);
-
+	const response = await fetch(TILE_URL, {
+	  headers: {
+	    'Accept-Encoding': 'gzip',
+	  }
+	});
         if (!response.ok) {
           throw new Error(`Failed to fetch ${TILE_URL}: ${response.status} ${response.statusText}`);
         }
 
         const bytes = new Uint8Array(await response.arrayBuffer());
         const tile = new VectorTile(new Pbf(bytes));
-        const layer = tile.layers[TILE_LAYER];
+        const availableLayers = Object.keys(tile.layers);
+        const selectedLayerName = tile.layers[PREFERRED_LAYER] ? PREFERRED_LAYER : availableLayers[0];
+        const layer = selectedLayerName ? tile.layers[selectedLayerName] : undefined;
 
         if (!layer) {
-          throw new Error(`Layer "${TILE_LAYER}" was not found in ${TILE_URL}`);
+          throw new Error(`No layers found in tile. Available layers: ${availableLayers.join(', ')}`);
         }
 
         const polygonFeatures: { geometry: Geometry; kind: string }[] = [];
-        const roadFeatures: { geometry: Geometry; kind: string }[] = [];
+        const lineFeatures: { geometry: Geometry; kind: string }[] = [];
+        const pointFeatures: { geometry: Geometry; kind: string }[] = [];
 
         for (let index = 0; index < layer.length; index += 1) {
           const feature = layer.feature(index);
-          const kind = String(feature.properties.kind ?? 'unknown');
+          const kind = String(feature.properties.kind ?? feature.properties.class ?? feature.properties.type ?? 'point');
+          const geometry = feature.loadGeometry();
 
-          if (feature.type === 3) {
-            polygonFeatures.push({ geometry: feature.loadGeometry(), kind });
-          }
-
-          if (feature.type === 2 && (kind === 'road' || kind === 'major_road')) {
-            roadFeatures.push({ geometry: feature.loadGeometry(), kind });
-          }
+          if (feature.type === 3) polygonFeatures.push({ geometry, kind });
+          if (feature.type === 2) lineFeatures.push({ geometry, kind });
+          if (feature.type === 1) pointFeatures.push({ geometry, kind });
         }
 
         const transform = getTileTransform([
           ...polygonFeatures.map((feature) => feature.geometry),
-          ...roadFeatures.map((feature) => feature.geometry),
+          ...lineFeatures.map((feature) => feature.geometry),
+          ...pointFeatures.map((feature) => feature.geometry),
         ]);
 
         if (!transform) {
@@ -171,15 +169,26 @@ export function MvtShapeCanvas() {
           kind,
         }));
 
-        const renderRoads = roadFeatures.map(({ geometry, kind }) => ({
+        const renderLines = lineFeatures.map(({ geometry, kind }) => ({
           path: buildLinePath(geometry, transform),
           kind,
-          ...roadStyleForKind(kind),
+          ...lineStyleForKind(kind),
         }));
 
+        const renderPoints = pointFeatures.flatMap(({ geometry, kind }) =>
+          geometry.flat().map((point) => ({
+            ...toCanvasPoint(point, transform),
+            color: colorForKind(kind),
+            kind,
+            radius: 4,
+          }))
+        );
+
         if (mounted) {
+          setLayerName(selectedLayerName);
           setPolygons(renderPolygons);
-          setRoads(renderRoads);
+          setLines(renderLines);
+          setPoints(renderPoints);
           setError(null);
         }
       } catch (err) {
@@ -196,15 +205,11 @@ export function MvtShapeCanvas() {
     };
   }, []);
 
-  const countsByKind = [...polygons, ...roads].reduce<Record<string, number>>((counts, item) => {
-    counts[item.kind] = (counts[item.kind] ?? 0) + 1;
-    return counts;
-  }, {});
-
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>MVT tile rendered in Skia</Text>
-      <Text style={styles.subtitle}>Rendering polygons and roads from {TILE_URL}</Text>
+      <Text style={styles.title}>Martin MVT tile rendered in Skia</Text>
+      <Text style={styles.subtitle}>{TILE_URL}</Text>
+      {layerName && <Text style={styles.subtitle}>Layer: {layerName}</Text>}
 
       <View style={styles.canvasFrame}>
         <Canvas style={styles.canvas}>
@@ -212,40 +217,32 @@ export function MvtShapeCanvas() {
           {polygons.map((item, index) => (
             <Path key={`polygon-${index}`} path={item.path} color={item.color} />
           ))}
-          {roads.map((item, index) => (
+          {lines.map((item, index) => (
             <Path
-              key={`road-casing-${index}`}
+              key={`line-casing-${index}`}
               path={item.path}
               color="#8d8d8d"
               style="stroke"
               strokeWidth={item.strokeWidth + 2}
             />
           ))}
-          {roads.map((item, index) => (
+          {lines.map((item, index) => (
             <Path
-              key={`road-${index}`}
+              key={`line-${index}`}
               path={item.path}
               color={item.color}
               style="stroke"
               strokeWidth={item.strokeWidth}
             />
           ))}
+          {points.map((item, index) => (
+            <Circle key={`point-${index}`} cx={item.x} cy={item.y} r={item.radius} color={item.color} />
+          ))}
         </Canvas>
       </View>
 
-      <View style={styles.legend}>
-        {Object.entries(countsByKind).map(([kind, count]) => (
-          <View key={kind} style={styles.legendItem}>
-            <View style={[styles.swatch, { backgroundColor: colorForKind(kind) }]} />
-            <Text style={styles.legendText}>
-              {kind}: {count}
-            </Text>
-          </View>
-        ))}
-      </View>
-
       <Text style={styles.count}>
-        {polygons.length} polygon(s), {roads.length} road(s)
+        {polygons.length} polygon(s), {lines.length} line(s), {points.length} point(s)
       </Text>
       {error && <Text style={styles.error}>{error}</Text>}
     </View>
@@ -277,27 +274,6 @@ const styles = StyleSheet.create({
   },
   canvas: {
     flex: 1,
-  },
-  legend: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-    marginTop: 12,
-  },
-  legendItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  swatch: {
-    width: 14,
-    height: 14,
-    borderRadius: 3,
-    borderColor: '#999999',
-    borderWidth: 1,
-  },
-  legendText: {
-    color: '#333333',
   },
   count: {
     marginTop: 8,
