@@ -4,16 +4,17 @@ import Pbf from 'pbf';
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-const CANVAS_SIZE = 320;
+import { PREFERRED_LAYER, TILE_URL } from './mvt-config';
+
+const CANVAS_SIZE = 620;
 const PADDING = 32;
-const TILE_URL = 'http://localhost:3000/world_cities/10/582/296';
-const PREFERRED_LAYER = 'world_cities';
+const WATER_LAYER = 'water';
 
 type Point = { x: number; y: number };
 type Geometry = Point[][];
-type RenderPolygon = { path: SkPath; color: string; kind: string };
-type RenderLine = { path: SkPath; color: string; kind: string; strokeWidth: number };
-type RenderPoint = { x: number; y: number; color: string; kind: string; radius: number };
+type RenderPolygon = { path: SkPath; color: string; kind: string; layer: string };
+type RenderLine = { path: SkPath; color: string; kind: string; strokeWidth: number; layer: string };
+type RenderPoint = { x: number; y: number; color: string; kind: string; radius: number; layer: string };
 
 type TileTransform = {
   minX: number;
@@ -25,10 +26,11 @@ type TileTransform = {
 
 const colorForKind = (kind: string) => {
   switch (kind) {
+    case 'ocean':
+    case 'water':
+      return '#4da3ff';
     case 'park':
       return '#74c476';
-    case 'water':
-      return '#6baed6';
     case 'building':
       return '#bdbdbd';
     case 'commercial':
@@ -108,8 +110,11 @@ const buildLinePath = (lines: Geometry, transform: TileTransform) => {
   return path;
 };
 
+const featureKind = (properties: Record<string, unknown>) =>
+  String(properties.kind ?? properties.class ?? properties.type ?? properties.natural ?? properties.name ?? 'point');
+
 export function MvtShapeCanvas() {
-  const [layerName, setLayerName] = useState<string | null>(null);
+  const [layerNames, setLayerNames] = useState<string[]>([]);
   const [polygons, setPolygons] = useState<RenderPolygon[]>([]);
   const [lines, setLines] = useState<RenderLine[]>([]);
   const [points, setPoints] = useState<RenderPoint[]>([]);
@@ -120,11 +125,8 @@ export function MvtShapeCanvas() {
 
     const loadTile = async () => {
       try {
-	const response = await fetch(TILE_URL, {
-	  headers: {
-	    'Accept-Encoding': 'gzip',
-	  }
-	});
+        const response = await fetch(TILE_URL);
+
         if (!response.ok) {
           throw new Error(`Failed to fetch ${TILE_URL}: ${response.status} ${response.statusText}`);
         }
@@ -132,26 +134,39 @@ export function MvtShapeCanvas() {
         const bytes = new Uint8Array(await response.arrayBuffer());
         const tile = new VectorTile(new Pbf(bytes));
         const availableLayers = Object.keys(tile.layers);
-        const selectedLayerName = tile.layers[PREFERRED_LAYER] ? PREFERRED_LAYER : availableLayers[0];
-        const layer = selectedLayerName ? tile.layers[selectedLayerName] : undefined;
+        const mainLayerName = tile.layers[PREFERRED_LAYER] ? PREFERRED_LAYER : availableLayers[0];
+        const selectedLayerNames = Array.from(
+          new Set([mainLayerName, tile.layers[WATER_LAYER] ? WATER_LAYER : undefined].filter(Boolean))
+        ) as string[];
 
-        if (!layer) {
+        if (selectedLayerNames.length === 0) {
           throw new Error(`No layers found in tile. Available layers: ${availableLayers.join(', ')}`);
         }
 
-        const polygonFeatures: { geometry: Geometry; kind: string }[] = [];
-        const lineFeatures: { geometry: Geometry; kind: string }[] = [];
-        const pointFeatures: { geometry: Geometry; kind: string }[] = [];
+        const polygonFeatures: { geometry: Geometry; kind: string; layer: string }[] = [];
+        const lineFeatures: { geometry: Geometry; kind: string; layer: string }[] = [];
+        const pointFeatures: { geometry: Geometry; kind: string; layer: string }[] = [];
 
-        for (let index = 0; index < layer.length; index += 1) {
-          const feature = layer.feature(index);
-          const kind = String(feature.properties.kind ?? feature.properties.class ?? feature.properties.type ?? 'point');
-          const geometry = feature.loadGeometry();
+        selectedLayerNames.forEach((selectedLayerName) => {
+          const layer = tile.layers[selectedLayerName];
 
-          if (feature.type === 3) polygonFeatures.push({ geometry, kind });
-          if (feature.type === 2) lineFeatures.push({ geometry, kind });
-          if (feature.type === 1) pointFeatures.push({ geometry, kind });
-        }
+          for (let index = 0; index < layer.length; index += 1) {
+            const feature = layer.feature(index);
+            const kind = featureKind(feature.properties);
+            const geometry = feature.loadGeometry();
+
+            if (selectedLayerName === WATER_LAYER) {
+              if (feature.type === 3 && kind === 'ocean') {
+                polygonFeatures.push({ geometry, kind, layer: selectedLayerName });
+              }
+              continue;
+            }
+
+            if (feature.type === 3) polygonFeatures.push({ geometry, kind, layer: selectedLayerName });
+            if (feature.type === 2) lineFeatures.push({ geometry, kind, layer: selectedLayerName });
+            if (feature.type === 1) pointFeatures.push({ geometry, kind, layer: selectedLayerName });
+          }
+        });
 
         const transform = getTileTransform([
           ...polygonFeatures.map((feature) => feature.geometry),
@@ -163,29 +178,32 @@ export function MvtShapeCanvas() {
           throw new Error(`No renderable geometry was found in ${TILE_URL}`);
         }
 
-        const renderPolygons = polygonFeatures.map(({ geometry, kind }) => ({
+        const renderPolygons = polygonFeatures.map(({ geometry, kind, layer }) => ({
           path: buildPolygonPath(geometry, transform),
           color: colorForKind(kind),
           kind,
+          layer,
         }));
 
-        const renderLines = lineFeatures.map(({ geometry, kind }) => ({
+        const renderLines = lineFeatures.map(({ geometry, kind, layer }) => ({
           path: buildLinePath(geometry, transform),
           kind,
+          layer,
           ...lineStyleForKind(kind),
         }));
 
-        const renderPoints = pointFeatures.flatMap(({ geometry, kind }) =>
+        const renderPoints = pointFeatures.flatMap(({ geometry, kind, layer }) =>
           geometry.flat().map((point) => ({
             ...toCanvasPoint(point, transform),
             color: colorForKind(kind),
             kind,
+            layer,
             radius: 4,
           }))
         );
 
         if (mounted) {
-          setLayerName(selectedLayerName);
+          setLayerNames(selectedLayerNames);
           setPolygons(renderPolygons);
           setLines(renderLines);
           setPoints(renderPoints);
@@ -205,11 +223,13 @@ export function MvtShapeCanvas() {
     };
   }, []);
 
+  const oceanPolygons = polygons.filter((polygon) => polygon.layer === WATER_LAYER && polygon.kind === 'ocean');
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Martin MVT tile rendered in Skia</Text>
       <Text style={styles.subtitle}>{TILE_URL}</Text>
-      {layerName && <Text style={styles.subtitle}>Layer: {layerName}</Text>}
+      {layerNames.length > 0 && <Text style={styles.subtitle}>Layers: {layerNames.join(', ')}</Text>}
 
       <View style={styles.canvasFrame}>
         <Canvas style={styles.canvas}>
@@ -242,7 +262,8 @@ export function MvtShapeCanvas() {
       </View>
 
       <Text style={styles.count}>
-        {polygons.length} polygon(s), {lines.length} line(s), {points.length} point(s)
+        {polygons.length} polygon(s), {lines.length} line(s), {points.length} point(s), {oceanPolygons.length}{' '}
+        ocean polygon(s)
       </Text>
       {error && <Text style={styles.error}>{error}</Text>}
     </View>

@@ -3,6 +3,8 @@ import Pbf from 'pbf';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
+import { TILE_URL } from './mvt-config';
+
 type ParsedFeature = {
   id: string | number | undefined;
   type: number;
@@ -39,10 +41,10 @@ export function MvtInspector() {
 
     const loadTile = async () => {
       try {
-        const response = await fetch('/tiles/sample.mvt');
+        const response = await fetch(TILE_URL);
 
         if (!response.ok) {
-          throw new Error(`Failed to fetch sample.mvt: ${response.status} ${response.statusText}`);
+          throw new Error(`Failed to fetch ${TILE_URL}: ${response.status} ${response.statusText}`);
         }
 
         const bytes = new Uint8Array(await response.arrayBuffer());
@@ -69,7 +71,7 @@ export function MvtInspector() {
         }
       } catch (err) {
         if (mounted) {
-          setError(err instanceof Error ? err.message : 'Failed to parse sample.mvt');
+          setError(err instanceof Error ? err.message : 'Failed to parse vector tile');
         }
       } finally {
         if (mounted) {
@@ -88,7 +90,7 @@ export function MvtInspector() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Parsed vector tile</Text>
-      <Text style={styles.subtitle}>/tiles/sample.mvt</Text>
+      <Text style={styles.subtitle}>{TILE_URL}</Text>
 
       {loading && <ActivityIndicator style={styles.loader} />}
       {error && <Text style={styles.error}>{error}</Text>}
