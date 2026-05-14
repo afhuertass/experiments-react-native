@@ -1,7 +1,7 @@
 import { VectorTile } from '@mapbox/vector-tile';
-import { Canvas, Circle, Fill, Path, Skia, type SkPath } from '@shopify/react-native-skia';
+import { Canvas, Circle, Fill, Group, Path, Shader, Skia, type SkPath } from '@shopify/react-native-skia';
 import Pbf from 'pbf';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { PREFERRED_LAYER, TILE_URL } from './mvt-config';
@@ -114,11 +114,115 @@ const featureKind = (properties: Record<string, unknown>) =>
   String(properties.kind ?? properties.class ?? properties.type ?? properties.natural ?? properties.name ?? 'point');
 
 export function MvtShapeCanvas() {
+  const waterShader = useMemo(
+    () =>
+      Skia.RuntimeEffect.Make(`
+uniform float time;
+uniform float2 resolution;
+
+float hash(float2 p) {
+  return fract(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(float2 p) {
+  float2 i = floor(p);
+  float2 f = fract(p);
+  float2 u = f * f * (3.0 - 2.0 * f);
+  return mix(
+    mix(hash(i), hash(i + float2(1,0)), u.x),
+    mix(hash(i + float2(0,1)), hash(i + float2(1,1)), u.x),
+    u.y
+  );
+}
+
+float fbm(float2 p) {
+  float v = 0.0;
+  float a = 0.5;
+  for (int i = 0; i < 4; i++) {
+    v += a * noise(p);
+    p = p * 2.1 + float2(1.3, 1.7);
+    a *= 0.5;
+  }
+  return v;
+}
+
+half4 main(float2 p) {
+  float2 uv = p / resolution;
+
+  float t = time * 0.6;
+
+  float2 q = float2(
+    fbm(uv * 3.0 + float2(t * 0.4, t * 0.3)),
+    fbm(uv * 3.0 + float2(t * 0.3, t * 0.5))
+  );
+
+  float2 r = float2(
+    fbm(uv * 4.5 + 4.0 * q + float2(1.7, 9.2) + t * 0.15),
+    fbm(uv * 4.5 + 4.0 * q + float2(8.3, 2.8) + t * 0.12)
+  );
+
+  float f = fbm(uv * 5.0 + 4.0 * r + t * 0.1);
+
+  // Caustics — bright light refractions
+  float caustic1 = sin((uv.x + q.x * 0.4) * 18.0 + t * 3.1) *
+                   sin((uv.y + q.y * 0.4) * 14.0 - t * 2.3);
+  float caustic2 = sin((uv.x - r.x * 0.3) * 24.0 - t * 2.0) *
+                   sin((uv.y + r.y * 0.3) * 20.0 + t * 1.7);
+  float caustics = smoothstep(0.55, 1.0, (caustic1 + caustic2) * 0.5 + 0.5);
+
+  // Surface shimmer / specular
+  float shimmer = smoothstep(0.78, 1.0, noise(uv * 12.0 + float2(t * 2.2, -t * 1.8)));
+
+  // Foam at wave peaks
+  float foam = smoothstep(0.68, 1.0, f + r.x * 0.3);
+
+  // Depth — darker in center/deeper zones
+  float depth = 1.0 - length(uv - float2(0.5, 0.6)) * 0.6;
+
+  // Color layers
+  half4 abyssal  = half4(0.01, 0.12, 0.35, 1.0);
+  half4 deep     = half4(0.02, 0.24, 0.58, 1.0);
+  half4 mid      = half4(0.05, 0.45, 0.82, 1.0);
+  half4 shallow  = half4(0.10, 0.65, 0.88, 1.0);
+  half4 causticC = half4(0.55, 0.92, 1.00, 1.0);
+  half4 foamC    = half4(0.88, 0.97, 1.00, 1.0);
+  half4 shimmerC = half4(1.00, 1.00, 1.00, 1.0);
+
+  half4 water = mix(abyssal, deep, clamp(depth * 1.2, 0.0, 1.0));
+  water = mix(water, mid, clamp(f * 1.4, 0.0, 1.0));
+  water = mix(water, shallow, clamp(r.x * 0.8, 0.0, 1.0));
+  water = mix(water, causticC, caustics * 0.45);
+  water = mix(water, foamC, foam * 0.6);
+  water = mix(water, shimmerC, shimmer * 0.35);
+
+  return water;
+}
+`),
+    []
+  );
+
+  const [waterTime, setWaterTime] = useState(0);
   const [layerNames, setLayerNames] = useState<string[]>([]);
   const [polygons, setPolygons] = useState<RenderPolygon[]>([]);
   const [lines, setLines] = useState<RenderLine[]>([]);
   const [points, setPoints] = useState<RenderPoint[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let animationFrame = 0;
+    const start = performance.now();
+
+    const animate = (now: number) => {
+      setWaterTime((now - start) / 1000);
+      animationFrame = requestAnimationFrame(animate);
+    };
+
+    animationFrame = requestAnimationFrame(animate);
+
+    return () => {
+      cancelAnimationFrame(animationFrame);
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -224,6 +328,9 @@ export function MvtShapeCanvas() {
   }, []);
 
   const oceanPolygons = polygons.filter((polygon) => polygon.layer === WATER_LAYER && polygon.kind === 'ocean');
+  const nonOceanPolygons = polygons.filter(
+    (polygon) => !(polygon.layer === WATER_LAYER && polygon.kind === 'ocean')
+  );
 
   return (
     <View style={styles.container}>
@@ -234,7 +341,17 @@ export function MvtShapeCanvas() {
       <View style={styles.canvasFrame}>
         <Canvas style={styles.canvas}>
           <Fill color="#f7f7f7" />
-          {polygons.map((item, index) => (
+          {oceanPolygons.map((item, index) =>
+            waterShader ? (
+              <Group key={`ocean-shader-${index}`} clip={item.path}>
+                <Shader source={waterShader} uniforms={{ time: waterTime ,  resolution: [620, 620] }} />
+                <Fill />
+              </Group>
+            ) : (
+              <Path key={`ocean-fallback-${index}`} path={item.path} color={item.color} />
+            )
+          )}
+          {nonOceanPolygons.map((item, index) => (
             <Path key={`polygon-${index}`} path={item.path} color={item.color} />
           ))}
           {lines.map((item, index) => (
