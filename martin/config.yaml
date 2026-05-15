@@ -1,0 +1,4 @@
+web_ui: enableforall
+pmtiles:
+  sources:
+    world_cities: helsinki.pmtiles
