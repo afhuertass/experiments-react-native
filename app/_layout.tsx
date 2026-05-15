@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+import { Asset } from "expo-asset";
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -12,6 +14,13 @@ export const unstable_settings = {
 export default function RootLayout() {
   const colorScheme = useColorScheme();
 
+const [ready, setReady] = useState(false);
+  useEffect(() => {
+    Asset.loadAsync([
+      require("./assets/images/enhanced_base_texture.png"),
+      // add other assets here
+    ]).then(() => setReady(true));
+  }, []);
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
       <Stack>

@@ -1,9 +1,10 @@
 import { VectorTile } from '@mapbox/vector-tile';
-import { Canvas, Circle, Fill, Group, Path, Shader, Skia, type SkPath } from '@shopify/react-native-skia';
+import { Canvas, Circle, Fill, Group, Path, Shader, ImageShader , useImage, Skia, type SkPath } from '@shopify/react-native-skia';
 import Pbf from 'pbf';
 import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
+import { Asset } from "expo-asset";
 import { PREFERRED_LAYER, TILE_URL } from './mvt-config';
 
 const CANVAS_SIZE = 620;
@@ -36,8 +37,6 @@ const colorForKind = (kind: string) => {
       return '#bdbdbd';
     case 'commercial':
       return '#fdae6b';
-    case 'earth':
-      return '#8ccf5f';
     default:
       return '#7b2cbf';
   }
@@ -204,75 +203,30 @@ half4 main(float2 p) {
     []
   );
 
+
   const grassShader = useMemo(
     () =>
       Skia.RuntimeEffect.Make(`
+
+uniform shader image;
 uniform float time;
 uniform float2 resolution;
 
-float hash(float2 p) {
-  return fract(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
-}
-
-float noise(float2 p) {
-  float2 i = floor(p);
-  float2 f = fract(p);
-  float2 u = f * f * (3.0 - 2.0 * f);
-  return mix(
-    mix(hash(i), hash(i + float2(1,0)), u.x),
-    mix(hash(i + float2(0,1)), hash(i + float2(1,1)), u.x),
-    u.y
-  );
-}
-
 half4 main(float2 p) {
-  // work in pixel space — keeps noise frequencies visible
-  float t = time*0.1;
-
-  // rolling wind gust across x axis
-  float gust = noise(float2(p.x * 0.003 + t * 0.2, t * 0.15));
-  float wind = 0.6 + gust * 0.8;
-
-  // primary sway — horizontal ripple moving with wind
-  float swayA = sin(p.x * 0.07 + t * wind * 1.1 + noise(float2(p.x * 0.01, 0.0)) * 6.0);
-  float swayB = sin(p.x * 0.13 - t * wind * 0.7 + 1.5) * 0.5;
-  float sway = swayA * 0.6 + swayB * 0.4; // range roughly -1 to 1
-
-  // multi-scale color noise — pixel scale so contrast is clear
-  float n1 = noise(p * 0.12 + float2(t * 0.05, 0.0));       // large patches
-  float n2 = noise(p * 0.35 + float2(0.0, t * 0.03));       // medium detail
-  float n3 = noise(p * 0.9  + float2(t * 0.02, t * 0.02));  // fine blades
-
-  float detail = n1 * 0.5 + n2 * 0.3 + n3 * 0.2;
-
-  // tip brightness — sway peaks = light hits blade tips
-  float tipBright = smoothstep(0.3, 1.0, sway * 0.5 + 0.5);
-
-  // warm/cool patches — very slow large variation
-  float warmPatch = noise(p * 0.025 + float2(0.4, 1.1));
-
-  // dew — bright specks on some blades
-  float dew = smoothstep(0.80, 1.0, noise(p * 0.4 + float2(t * 0.04, 0.9)));
-
-  // colors
-  half4 dark   = half4(0.08, 0.28, 0.07, 1.0);
-  half4 mid    = half4(0.20, 0.52, 0.14, 1.0);
-  half4 bright = half4(0.42, 0.74, 0.18, 1.0);
-  half4 tipC   = half4(0.68, 0.90, 0.30, 1.0);
-  half4 warm   = half4(0.50, 0.68, 0.08, 1.0);
-  half4 dewC   = half4(0.85, 0.98, 0.88, 1.0);
-
-  half4 col = mix(dark, mid, detail * 1.6);          // base variation
-  col = mix(col, bright, clamp(sway * 0.5 + 0.3, 0.0, 1.0)); // wind bright
-  col = mix(col, warm,   clamp(warmPatch - 0.3, 0.0, 0.4));   // warm patches
-  col = mix(col, tipC,   tipBright * 0.65);          // tip highlights
-  col = mix(col, dewC,   dew * 0.5);                 // dew shimmer
-
-  return col;
+//return half4(1.0 , 0.0 , 0.0 , 1.0);
+float2 uv = p / resolution.x;
+return image.eval(p);
 }
 `),
     []
   );
+
+if (!grassShader) {
+  console.log("Shader failed to compile");
+  // Check Skia.RuntimeEffect.Make error — some versions expose it:
+  console.log(Skia.RuntimeEffect.Make.lastError);
+
+}
 
   const [waterTime, setWaterTime] = useState(0);
   const [layerNames, setLayerNames] = useState<string[]>([]);
@@ -420,6 +374,16 @@ half4 main(float2 p) {
       !(polygon.layer === EARTH_LAYER && polygon.kind === 'earth') &&
       !(polygon.layer === WATER_LAYER && polygon.kind === 'ocean')
   );
+//const image = useImage(require("./assets/images/enhanced_base_texture.png"));
+//const image = useImage("https://picsum.photos/200");
+//console.log("image resolved:", image?.width(), image?.height());
+
+
+
+const asset = Asset.fromModule(require("./assets/images/enhanced_base_texture.png"));
+const image = useImage(asset.uri); // use uri directly as fallbac
+
+console.log("image resolved:", image?.width(), image?.height());
 
   return (
     <View style={styles.container}>
@@ -428,46 +392,58 @@ half4 main(float2 p) {
       {layerNames.length > 0 && <Text style={styles.subtitle}>Layers: {layerNames.join(', ')}</Text>}
 
       <View style={styles.canvasFrame}>
-        <Canvas style={styles.canvas}>
-          <Fill color="#f7f7f7" />
-          {earthPolygons.map((item, index) =>
-            grassShader ? (
-              <Group key={`earth-shader-${index}`} clip={item.path}>
-                <Shader source={grassShader} uniforms={{ time: waterTime, resolution: [620,620] }} />
-                <Fill />
-              </Group>
-            ) : (
-              <Path key={`earth-fallback-${index}`} path={item.path} color={item.color} />
-            )
-          )}
-          {earthPolygons.map((item, index) => (
-            <Path
-              key={`earth-border-${index}`}
-              path={item.path}
-              color="#2f6b2f"
-              style="stroke"
-              strokeWidth={2}
-            />
-          ))}
-          {oceanPolygons.map((item, index) =>
-            waterShader ? (
-              <Group key={`ocean-shader-${index}`} clip={item.path}>
-                <Shader source={waterShader} uniforms={{ time: waterTime ,  resolution: [620, 620] }} />
-                <Fill />
-              </Group>
-            ) : (
-              <Path key={`ocean-fallback-${index}`} path={item.path} color={item.color} />
-            )
-          )}
-          {normalPolygons.map((item, index) => (
-            <Path key={`polygon-${index}`} path={item.path} color={item.color} />
-          ))}
-          
-          
-          {points.map((item, index) => (
-            <Circle key={`point-${index}`} cx={item.x} cy={item.y} r={item.radius} color={item.color} />
-          ))}
-        </Canvas>
+
+				<Canvas style={styles.canvas}>
+  <Fill color="#f7f7f7" />
+
+  {grassShader && image   &&
+    earthPolygons.map((item, index) => (
+      <Group key={`earth-shader-${index}`} clip={item.path}>
+        <Fill>
+          <Shader source={grassShader} uniforms={{ time: waterTime, resolution: [620, 620] }}>
+	      <ImageShader
+            image={image}
+            fit="cover"
+	    tx ="repeat"
+	    ty = "repeat"
+            rect={{ x: 0, y: 0, width: image.width(), height: image.height() }}
+          />
+          </Shader>
+        </Fill>
+      </Group>
+    ))
+  }
+
+  {earthPolygons.map((item, index) => (
+    <Path
+      key={`earth-border-${index}`}
+      path={item.path}
+      color="#2f6b2f"
+      style="stroke"
+      strokeWidth={2}
+    />
+  ))}
+
+  {oceanPolygons.map((item, index) =>
+    waterShader ? (
+      <Group key={`ocean-shader-${index}`} clip={item.path}>
+        <Fill>
+          <Shader source={waterShader} uniforms={{ time: waterTime, resolution: [620, 620] }} />
+        </Fill>
+      </Group>
+    ) : (
+      <Path key={`ocean-fallback-${index}`} path={item.path} color={item.color} />
+    )
+  )}
+
+  {normalPolygons.map((item, index) => (
+    <Path key={`polygon-${index}`} path={item.path} color={item.color} />
+  ))}
+
+  {points.map((item, index) => (
+    <Circle key={`point-${index}`} cx={item.x} cy={item.y} r={item.radius} color={item.color} />
+  ))}
+</Canvas>
       </View>
 
       <Text style={styles.count}>
