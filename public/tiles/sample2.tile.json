@@ -1,9 +1,9 @@
 {
-	"z": 13,
-	"x": 4093,
-	"y": 2723,
-	"url": "/tiles/sample2.mvt",
-	"layers": ["map"],
-	"featureCount": 63,
-	"description": "Synthetic map-like vector tile with parks, water, landuse polygons, buildings, roads, and POIs."
+  "z": 13,
+  "x": 4093,
+  "y": 2723,
+  "url": "/tiles/sample2.mvt",
+  "layers": ["map"],
+  "featureCount": 63,
+  "description": "Synthetic map-like vector tile with parks, water, landuse polygons, buildings, roads, and POIs."
 }
