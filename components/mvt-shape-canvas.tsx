@@ -1,5 +1,17 @@
 import { VectorTile } from "@mapbox/vector-tile";
-import { Canvas, Circle, Fill, Group, Path, Shader, ImageShader, useImage, Skia, type SkPath } from "@shopify/react-native-skia";
+import {
+  Canvas,
+  Circle,
+  Fill,
+  Group,
+  Path,
+  Shader,
+  ImageShader,
+  useImage,
+  Skia,
+  LinearGradient,
+  type SkPath
+} from "@shopify/react-native-skia";
 import Pbf from "pbf";
 import { useEffect, useMemo, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
@@ -226,13 +238,53 @@ half4 main(float2 p) {
       Skia.RuntimeEffect.Make(`
 
 uniform shader image;
+uniform shader bladeGradient;
 uniform float time;
 uniform float2 resolution;
 
+half4 sampleColor(int dist, int max_dist) {
+    // 1. Calculate the normalized position (0.0 at root, 1.0 at max distance)
+    // We cast to float to prevent integer division (which would result in 0)
+    float ratio = float(dist) / float(max_dist);
+    
+    // 2. Map the ratio to a pixel coordinate along the gradient.
+    // If it's a horizontal gradient, we scale along the X axis.
+    // If it's a vertical gradient, change this to: float2 samplePos = float2(0.0, ratio * resolution.y);
+    float2 samplePos = float2(ratio * resolution.x, 0.5);
+    
+    // 3. Evaluate the gradient shader at that specific pixel location
+    return bladeGradient.eval(samplePos);
+}
 half4 main(float2 p) {
 //return half4(1.0 , 0.0 , 0.0 , 1.0);
-float2 uv = p / resolution.x;
-return image.eval(p);
+const int MAX_BLADE_LEN = 20;
+half4 color_final = half4(0.0);
+//float2 uv = p / resolution.x;
+float ux = p.x / resolution.x;
+float uy = p.y / resolution.y;
+
+float2 currentP = p;
+half4 tip_color = half4(0.75, 0.95, 0.35, 1.0);
+
+for ( int dist = 0 ; dist <= MAX_BLADE_LEN ; ++dist ){
+half currentDist = half(dist);
+half blade_len = image.eval(currentP).r;
+
+if ( blade_len > 0 ) {
+	if (dist >= MAX_BLADE_LEN ) {
+		//return half4(1.0,1.0, 1.0 , 1.0 ); // tip color
+		color_final = tip_color;
+		break;
+	}else if ( dist < MAX_BLADE_LEN ){
+		//return half4( 0.0 , 0.0 , 1.0, 1.0) ;
+		color_final = sampleColor(dist , MAX_BLADE_LEN);
+		
+	}
+}
+currentP.y +=1;
+}
+//return image.eval(p);
+return color_final;
 }
 `),
     []
@@ -448,6 +500,8 @@ return image.eval(p);
                         height: image.height()
                       }}
                     />
+
+                    <LinearGradient start={{ x: 0, y: 0 }} end={{ x: 620, y: 620 }} colors={["#80e666", "#0d591a"]} />
                   </Shader>
                 </Fill>
               </Group>
