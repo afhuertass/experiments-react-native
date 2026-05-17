@@ -242,55 +242,53 @@ uniform shader bladeGradient;
 uniform float time;
 uniform float2 resolution;
 
-half4 sampleColor(int dist, int max_dist) {
-    // 1. Calculate the normalized position (0.0 at root, 1.0 at max distance)
-    // We cast to float to prevent integer division (which would result in 0)
-    float ratio = float(dist) / float(max_dist);
-    
-    // 2. Map the ratio to a pixel coordinate along the gradient.
-    // If it's a horizontal gradient, we scale along the X axis.
-    // If it's a vertical gradient, change this to: float2 samplePos = float2(0.0, ratio * resolution.y);
-    float2 samplePos = float2(ratio * resolution.x, 0.5);
-    
-    // 3. Evaluate the gradient shader at that specific pixel location
-    return bladeGradient.eval(samplePos);
-}
-int sampleBladeLen(float2 px) {
-  return int(image.eval(px).r * 255.0);
-}
+half4 main(float2 fragCoord) {
+half4 tip_color = half4(0.78, 0.95, 0.32, 1.0);  // lighter lime tip
+    float max_blade_height = 70.0; // The max height a blade can grow in pixels
+    half4 final_grass_color = half4(0.0);
+    float is_visible = 0.0;
+    float relative_height = 0.0;
 
-half4 main(float2 p) {
-//return half4(1.0 , 0.0 , 0.0 , 1.0);
-const int MAX_BLADE_LEN = 20;
-half4 color_final = half4(0.0);
-//float2 uv = p / resolution.x;
-float ux = p.x / resolution.x;
-float uy = p.y / resolution.y;
+    // We look down from our current position to find if there is a grass root 
+    // that is tall enough to reach us.
+    for (int i = 0; i <= 70; ++i) {
+        // Look 'i' pixels downwards (In Skia, +Y is down)
+	float target_y = fragCoord.y - float(i);
+        float2 root_coord = float2(fragCoord.x, target_y );
+        
+        // Sample the growth factor at that specific root pixel
+        float blade_growth_factor = image.eval(root_coord).r;
+        float actual_blade_height = blade_growth_factor * max_blade_height;
+        
+        // If the root we found has grown tall enough to reach or pass our current pixel...
+        if (float(i) <= actual_blade_height && blade_growth_factor > 0.0) {
+            is_visible = 1.0;
+            // 'i' is exactly how many pixels we are above the root!
+            relative_height = float(i) / actual_blade_height; 
+            break; // We found the blade occupying this pixel, stop searching
+        }
+    }
 
-float2 currentP = p;
-half4 tip_color = half4(0.75, 0.95, 0.35, 1.0);
+    // If we are touching a valid blade piece, calculate its color
+    if (is_visible > 0.0) {
+        // Fix the gradient lookup by matching how your Skia canvas handles space.
+        // If your gradient spans the screen width:
+//
+	float height_from_tip = relative_height;
+	relative_height = 1.0 - height_from_tip;
 
+        float gradient_x = relative_height * resolution.x;
+        half4 grass_base_color = bladeGradient.eval(float2(gradient_x, resolution.y * 0.5));
+        
+        // Apply your tip highlight color to the top 20% of the blade
+        float tip_mix_factor = smoothstep(0.80, 1.0, relative_height);
+        final_grass_color = mix(grass_base_color, tip_color, tip_mix_factor);
+    }
 
-for ( int dist = 0 ; dist <= MAX_BLADE_LEN ; ++dist ){
-//half blade_len = image.eval(currentP).r;
+	half4 background_color = half4(0.68, 0.85, 0.25, 1.0);  // warm olive tip
+    return mix(background_color, final_grass_color, is_visible);
+    //return half4(1.0, 1.0 , 0.0 , 1.0);
 
-int blade_len = sampleBladeLen(currentP);
-if ( blade_len > 0 ) {
-	if (dist >= blade_len ) {
-		//return half4(1.0,1.0, 1.0 , 1.0 ); // tip color
-		color_final = half4( 1.0 , 0.0 , 0.0, 1.0);
-		break;
-	}else if ( dist < blade_len ){
-		//return half4( 0.0 , 0.0 , 1.0, 1.0) ;
-		color_final = sampleColor(dist , blade_len);
-break;
-		
-	}
-}
-currentP.y -=1;
-}
-//return image.eval(p);
-return color_final;
 }
 `),
     []
