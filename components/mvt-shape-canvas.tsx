@@ -255,6 +255,10 @@ half4 sampleColor(int dist, int max_dist) {
     // 3. Evaluate the gradient shader at that specific pixel location
     return bladeGradient.eval(samplePos);
 }
+int sampleBladeLen(float2 px) {
+  return int(image.eval(px).r * 255.0);
+}
+
 half4 main(float2 p) {
 //return half4(1.0 , 0.0 , 0.0 , 1.0);
 const int MAX_BLADE_LEN = 20;
@@ -266,22 +270,24 @@ float uy = p.y / resolution.y;
 float2 currentP = p;
 half4 tip_color = half4(0.75, 0.95, 0.35, 1.0);
 
-for ( int dist = 0 ; dist <= MAX_BLADE_LEN ; ++dist ){
-half currentDist = half(dist);
-half blade_len = image.eval(currentP).r;
 
+for ( int dist = 0 ; dist <= MAX_BLADE_LEN ; ++dist ){
+//half blade_len = image.eval(currentP).r;
+
+int blade_len = sampleBladeLen(currentP);
 if ( blade_len > 0 ) {
-	if (dist >= MAX_BLADE_LEN ) {
+	if (dist >= blade_len ) {
 		//return half4(1.0,1.0, 1.0 , 1.0 ); // tip color
-		color_final = tip_color;
+		color_final = half4( 1.0 , 0.0 , 0.0, 1.0);
 		break;
-	}else if ( dist < MAX_BLADE_LEN ){
+	}else if ( dist < blade_len ){
 		//return half4( 0.0 , 0.0 , 1.0, 1.0) ;
-		color_final = sampleColor(dist , MAX_BLADE_LEN);
+		color_final = sampleColor(dist , blade_len);
+break;
 		
 	}
 }
-currentP.y +=1;
+currentP.y -=1;
 }
 //return image.eval(p);
 return color_final;
